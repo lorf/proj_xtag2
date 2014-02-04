@@ -1,17 +1,25 @@
+/*
+ * vim: ts=2 sw=2 et :
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #ifdef _WIN32
 #include "usb.h"
 #else
-#include "libusb.h"
+#include <unistd.h>
+#include <libusb-1.0/libusb.h>
 #endif
 
-#include "app_l1_hid.h"
+/*#include "app_l1_hid.h"*/
 
 /* the device's vendor and product id */
 #define XMOS_XTAG2_VID 0x20b1
 #define XMOS_XTAG2_PID 0xf7d1
+#define XMOS_STARTKIT_PID 0xf7d3
 #define XMOS_XTAG2_EP_IN 0x82
 #define XMOS_XTAG2_EP_OUT 0x01
 
@@ -40,7 +48,8 @@ static int find_xmos_device(unsigned int id) {
   for (bus = usb_get_busses(); bus; bus = bus->next) {
     for (dev = bus->devices; dev; dev = dev->next) {
       if ((dev->descriptor.idVendor == XMOS_XTAG2_VID) && 
-          (dev->descriptor.idProduct == XMOS_XTAG2_PID)) {
+          ((dev->descriptor.idProduct == XMOS_XTAG2_PID) ||
+           (dev->descriptor.idProduct == XMOS_STARTKIT_PID))) {
 
         if (dev->descriptor.bcdDevice & 0xff00) {
           fprintf(stderr, "Device is not running USB loader, please reboot ...\n");
@@ -127,7 +136,8 @@ static int find_xmos_device(unsigned int id) {
     struct libusb_device_descriptor desc;
     libusb_get_device_descriptor(dev, &desc); 
     if ((desc.idVendor == XMOS_XTAG2_VID) && 
-        (desc.idProduct == XMOS_XTAG2_PID)) {
+        ((desc.idProduct == XMOS_XTAG2_PID) ||
+         (desc.idProduct == XMOS_STARTKIT_PID))) {
 
       if (desc.bcdDevice & 0xff00) {
         fprintf(stderr, "Device is not running USB loader, please reboot ...\n");
@@ -209,7 +219,7 @@ static int device_write(char *data, unsigned int length, unsigned int timeout) {
 }
 #endif
 
-static void loadFirmware() {
+static void loadFirmware(void *burnData, size_t bin_len) {
   unsigned int i = 0;
   unsigned int address = 0;
   unsigned int num_blocks = 0;
@@ -217,7 +227,6 @@ static void loadFirmware() {
   unsigned int remainder = 0;
   unsigned int data_ptr = 0;
   int cmd_buf[LOADER_BUF_SIZE/4];
-  int bin_len = sizeof(burnData);
   char *charBurnData = (char *)burnData;
 
   memset(cmd_buf, 0, LOADER_BUF_SIZE);
@@ -255,16 +264,78 @@ static void loadFirmware() {
   device_read((char *)cmd_buf, 8, 1000);
 }
 
-int main(int argc, char **argv) {
-  int i = 0;
-  int j = 0;
+int read_file(char *filename, void **datap, size_t *sizep)
+{
+  FILE *fp;
+  struct stat st;
+  size_t size;
+  void *data;
+  int rv = 0;
 
+  fp = fopen(filename, "r");
+  if (fp == NULL) {
+    fprintf(stderr, "Can't open input file \"%s\": %s\n", filename, strerror(errno));
+    return -1;
+  }
+
+  rv = fstat(fileno(fp), &st);
+  if (rv < 0) {
+    fprintf(stderr, "Can't stat input file \"%s\": %s\n", filename, strerror(errno));
+    return -1;
+  }
+
+  data = malloc(st.st_size);
+  if (data == NULL) {
+    fprintf(stderr, "Can't allocate %lu bytes: %s\n", st.st_size, strerror(errno));
+    return -1;
+  }
+
+  size = fread(data, 1, st.st_size, fp);
+  if (size != st.st_size) {
+    fprintf(stderr, "Can't read input file \"%s\", size should be %lu, got %lu: %s\n",
+        filename, st.st_size, size, strerror(errno));
+    return -1;
+  }
+
+  if (fclose(fp) != 0) {
+    fprintf(stderr, "Can't close input file \"%s\": %s\n", filename, strerror(errno));
+    return -1;
+  }
+
+  *datap = data;
+  if (sizep != NULL) {
+    *sizep = size;
+  }
+
+  return 0;
+}
+
+
+
+int main(int argc, char **argv) {
+
+  char *fwfile;
+  void *fwdata;
+  size_t fwsize;
+
+  if (argc < 2) {
+    printf("usage: %s <image.bin>\n", argv[0]);
+    return 1;
+  }
+
+  fwfile = argv[1];
+
+  if (read_file(fwfile, &fwdata, &fwsize) < 0) {
+    return 1;
+  }
 
   if (open_device() < 0) {
     return 1;
   }
 
-  loadFirmware();
+  loadFirmware(fwdata, fwsize);
+
+  free(fwdata);
 
   reset_device();
 
