@@ -253,7 +253,7 @@ static void loadFirmware(void *burnData, size_t bin_len) {
     cmd_buf[1] = address;
     cmd_buf[2] = remainder;
     memcpy(&cmd_buf[3], &charBurnData[data_ptr], remainder);
-    device_write((char *)cmd_buf, LOADER_BUF_SIZE, 1000);
+    device_write((char *)cmd_buf, 12 + remainder, 1000);
     device_read((char *)cmd_buf, 8, 1000);
   }
 
